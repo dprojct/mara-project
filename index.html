@@ -45,6 +45,19 @@
         #loading { 
             position: fixed; inset: 0; background: #000; color: #ffd700; 
             display: flex; justify-content: center; align-items: center; z-index: 100; 
+            font-size: 2rem;
+        }
+
+        #permission-error {
+            position: fixed; inset: 0; background: #000; color: #ff0000;
+            display: none; flex-direction: column; justify-content: center;
+            align-items: center; z-index: 150; text-align: center; padding: 20px;
+        }
+
+        #permission-error p {
+            color: #fff;
+            max-width: 600px;
+            line-height: 1.6;
         }
     </style>
 </head>
@@ -52,6 +65,17 @@
 
 <div id="loading">SYNCING OPTICAL GRID...</div>
 <div id="tint"></div>
+
+<div id="permission-error">
+    <h1 style="font-size: 3rem; margin: 0;">CAMERA ACCESS DENIED</h1>
+    <p style="font-size: 1.2rem;">This game requires camera access to work. Please:</p>
+    <ul style="text-align: left; color: #ffd700;">
+        <li>Click the camera icon in your browser's address bar</li>
+        <li>Allow camera permissions</li>
+        <li>Refresh the page</li>
+    </ul>
+    <p style="font-size: 0.9rem; color: #888;">Make sure you're accessing via HTTPS or localhost</p>
+</div>
 
 <div id="game-over">
     <h1 style="font-size: 5rem; margin: 0;">WASTED</h1>
@@ -70,7 +94,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/** * GAME STATE 
+/** 
+ * GAME STATE 
  */
 let score = 0;
 let isGameOver = false;
@@ -141,7 +166,7 @@ function createObject(forceBomb = false) {
 /**
  * HAND TRACKING
  */
-const hands = new Hands({ locateFile: (file) => https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file} });
+const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8 });
 
 hands.onResults(results => {
@@ -242,21 +267,42 @@ function animate() {
         if(b.position.z < -60) { scene.remove(b); bullets.splice(bi, 1); }
     });
 
+    // Render the scene
     renderer.render(scene, camera);
 }
 
-const cameraUtils = new Camera(document.getElementById('webcam'), {
-    onFrame: async () => { await hands.send({image: document.getElementById('webcam')}); },
-    width: 1280, height: 720
+// Window resize handler
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-cameraUtils.start().then(() => {
-    document.getElementById('loading').style.display = 'none';
-    // Ensure 3 bombs appear at start
-    createObject(true); createObject(true); createObject(true);
-    for(let i=0; i<4; i++) createObject();
-    animate();
+// Initialize game objects
+for(let i = 0; i < 8; i++) {
+    createObject();
+}
+
+// Start camera and hand tracking
+const vid = document.getElementById('webcam');
+const cam = new Camera(vid, {
+    onFrame: async () => { 
+        await hands.send({image: vid}); 
+    },
+    width: 1280, 
+    height: 720
 });
+
+cam.start()
+    .then(() => {
+        document.getElementById('loading').style.display = 'none';
+        animate(); // Start the game loop
+    })
+    .catch(err => {
+        console.error('Camera error:', err);
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('permission-error').style.display = 'flex';
+    });
 </script>
 </body>
 </html>
