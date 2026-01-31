@@ -173,15 +173,12 @@ hands.onResults(results => {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         const landmarks = results.multiHandLandmarks[0];
         const tip = landmarks[8];
-        const thumb = landmarks[4];
-        const indexBase = landmarks[5];
 
         // Coordinate mapping to screen space
         fingerPos.set(-(tip.x - 0.5) * 26, -(tip.y - 0.5) * 16, -5);
 
-        // Firing Logic (Pinch/Tap)
-        const dist = Math.sqrt(Math.pow(thumb.x - indexBase.x, 2) + Math.pow(thumb.y - indexBase.y, 2));
-        if (dist < 0.1) shoot();
+        // Auto-shoot continuously when hand is detected
+        shoot();
     }
 });
 
