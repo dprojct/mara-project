@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR COIN HUNTER - PRO</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
+        
+        /* Mirroring the camera for a natural feel */
+        #webcam { 
+            position: fixed; inset: 0; width: 100vw; height: 100vh; 
+            object-fit: cover; transform: scaleX(-1); z-index: -2; 
+        }
+
+        /* This layer darkens the camera slightly so 3D objects "pop" */
+        #tint {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.2); z-index: -1; pointer-events: none;
+        }
+
+        canvas { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+        
+        #ui-layer { 
+            position: absolute; top: 20px; left: 20px; color: #ffd700; 
+            font-size: 2.5rem; z-index: 10; text-shadow: 2px 2px 10px #000; 
+        }
+
+        #high-score-ui {
+            position: absolute; top: 75px; left: 20px; color: #fff;
+            font-size: 1.2rem; z-index: 10; text-shadow: 0 0 10px #000;
+        }
+        
+        #game-over { 
+            position: fixed; inset: 0; background: rgba(0, 0, 0, 0.9); color: #ff0000; 
+            display: none; flex-direction: column; justify-content: center; 
+            align-items: center; z-index: 200; text-align: center;
+        }
+
+        button { 
+            padding: 15px 40px; font-size: 1.5rem; cursor: pointer; 
+            background: #ffd700; color: #000; border: none; 
+            margin-top: 20px; font-weight: bold; border-radius: 50px;
+        }
+
+        #loading { 
+            position: fixed; inset: 0; background: #000; color: #ffd700; 
+            display: flex; justify-content: center; align-items: center; z-index: 100; 
+        }
+    </style>
+</head>
+<body>
+
+<div id="loading">SYNCING OPTICAL GRID...</div>
+<div id="tint"></div>
+
+<div id="game-over">
+    <h1 style="font-size: 5rem; margin: 0;">WASTED</h1>
+    <p style="font-size: 1.5rem; color: white;">SCORE DROPPED BELOW -1000</p>
+    <h2 id="final-score" style="color: #ffd700;"></h2>
+    <button onclick="location.reload()">REBOOT SYSTEM</button>
+</div>
+
+<div id="ui-layer">SCORE: <span id="score">0</span></div>
+<div id="high-score-ui">BEST: <span id="high-score">0</span></div>
+
+<video id="webcam" autoplay playsinline></video>
+
+<script src="https://unpkg.com/three@0.152.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+/** * GAME STATE 
+ */
+let score = 0;
+let isGameOver = false;
+let highScore = localStorage.getItem('arCoinHighScore') || 0;
+document.getElementById('high-score').innerText = highScore;
+
+// 1. ENGINE SETUP
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0); 
+document.body.appendChild(renderer.domElement);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+const sun = new THREE.DirectionalLight(0xffffff, 2);
+sun.position.set(5, 10, 7);
+scene.add(sun);
+
+// 2. PRECISION CROSSHAIR
+const crosshair = new THREE.Group();
+const hudMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 });
+crosshair.add(new THREE.Mesh(new THREE.RingGeometry(0.12, 0.16, 32), hudMat));
+crosshair.add(new THREE.Mesh(new THREE.RingGeometry(0.25, 0.28, 4), hudMat));
+scene.add(crosshair);
+
+let items = [];
+let bullets = [];
+let fingerPos = new THREE.Vector3(0,0,0);
+
+/**
+ * ENTITY CREATION (Coins and Glowing Bombs)
+ */
+ 
+function createObject(forceBomb = false) {
+    if(isGameOver) return;
+    const isBomb = forceBomb || Math.random() < 0.35; 
+    let mesh;
+
+    if (isBomb) {
+        // BOMB: Large Spiky Neon Red
+        mesh = new THREE.Mesh(
+            new THREE.IcosahedronGeometry(1.0, 0),
+            new THREE.MeshStandardMaterial({ 
+                color: 0x000000, 
+                emissive: 0xff0000, 
+                emissiveIntensity: 8
+            })
+        );
+        mesh.userData.type = "bomb";
+    } else {
+        // COIN: Gold Spinning Disc
+        mesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.6, 0.6, 0.1, 32),
+            new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 1, roughness: 0.1 })
+        );
+        mesh.rotation.x = Math.PI / 2;
+        mesh.userData.type = "coin";
+    }
+
+    mesh.position.set((Math.random()-0.5)*22, (Math.random()-0.5)*14, -40);
+    mesh.userData.speed = 0.15 + Math.random() * 0.15;
+    scene.add(mesh);
+    items.push(mesh);
+}
+
+/**
+ * HAND TRACKING
+ */
+const hands = new Hands({ locateFile: (file) => https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file} });
+hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8 });
+
+hands.onResults(results => {
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        const tip = landmarks[8];
+        const thumb = landmarks[4];
+        const indexBase = landmarks[5];
+
+        // Coordinate mapping to screen space
+        fingerPos.set(-(tip.x - 0.5) * 26, -(tip.y - 0.5) * 16, -5);
+
+        // Firing Logic (Pinch/Tap)
+        const dist = Math.sqrt(Math.pow(thumb.x - indexBase.x, 2) + Math.pow(thumb.y - indexBase.y, 2));
+        if (dist < 0.1) shoot();
+    }
+});
+
+let canFire = true;
+function shoot() {
+    if (!canFire || isGameOver) return;
+    canFire = false;
+    setTimeout(() => canFire = true, 200);
+
+    const b = new THREE.Mesh(
+        new THREE.SphereGeometry(0.18), 
+        new THREE.MeshBasicMaterial({ color: 0x00ffff }) // Cyan Tracer
+    );
+    b.position.set(crosshair.position.x, crosshair.position.y - 1, 0);
+    const target = new THREE.Vector3(crosshair.position.x, crosshair.position.y, -45);
+    b.userData.dir = new THREE.Vector3().subVectors(target, b.position).normalize();
+    scene.add(b);
+    bullets.push(b);
+}
+
+/**
+ * MAIN LOOP
+ */
+function animate() {
+    if(isGameOver) return;
+    requestAnimationFrame(animate);
+
+    // Smooth HUD movement
+    crosshair.position.lerp(fingerPos, 0.8);
+    crosshair.rotation.z += 0.02;
+
+    // Item Animation
+    items.forEach((item, i) => {
+        item.position.z += item.userData.speed;
+        item.rotation.y += 0.05;
+        
+        // Make bombs pulse red
+        if(item.userData.type === "bomb") {
+            const pulse = 1 + Math.sin(Date.now() * 0.01) * 0.1;
+            item.scale.set(pulse, pulse, pulse);
+        }
+
+        if (item.position.z > 5) {
+            scene.remove(item);
+            items.splice(i, 1);
+            createObject();
+        }
+    });
+
+    // Bullets & Collisions
+    bullets.forEach((b, bi) => {
+        b.position.add(b.userData.dir.clone().multiplyScalar(1.8));
+        
+        items.forEach((item, ii) => {
+            if (b.position.distanceTo(item.position) < 1.4) {
+                if (item.userData.type === "bomb") {
+                    score -= 500;
+                } else {
+                    score += 100;
+                }
+                
+                // Update UI
+                document.getElementById('score').innerText = score;
+                if(score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('arCoinHighScore', highScore);
+                    document.getElementById('high-score').innerText = highScore;
+                }
+
+                // Cleanup
+                scene.remove(item); scene.remove(b);
+                items.splice(ii, 1); bullets.splice(bi, 1);
+                createObject();
+
+                // Game Over
+                if(score <= -1000) {
+                    isGameOver = true;
+                    document.getElementById('final-score').innerText = "TOTAL: " + score;
+                    document.getElementById('game-over').style.display = 'flex';
+                }
+            }
+        });
+        if(b.position.z < -60) { scene.remove(b); bullets.splice(bi, 1); }
+    });
+
+    renderer.render(scene, camera);
+}
+
+const cameraUtils = new Camera(document.getElementById('webcam'), {
+    onFrame: async () => { await hands.send({image: document.getElementById('webcam')}); },
+    width: 1280, height: 720
+});
+
+cameraUtils.start().then(() => {
+    document.getElementById('loading').style.display = 'none';
+    // Ensure 3 bombs appear at start
+    createObject(true); createObject(true); createObject(true);
+    for(let i=0; i<4; i++) createObject();
+    animate();
+});
+</script>
+</body>
+</html>
